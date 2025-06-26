@@ -1,0 +1,244 @@
+---
+title: "BULK RNASEQ (DESEQ to FGSEA)"
+output: html_notebook
+author: Tranquille Marvel
+---
+
+```{r}
+colDataoi<-coldata 
+ctsoi <- cnts[, rownames(colDataoi)]
+
+dds <- DESeqDataSetFromMatrix(
+      countData = ctsoi,
+      colData = colDataoi,
+      design = ~ condition # OR batch + condition
+      )
+
+keep <- rowSums(counts(dds) > 0) >= (0.1 * ncol(dds)) #10% of the genes read greater than 0 (can be 10-70, most likely 30-50)
+# # Set minimum percentage of samples in which a gene must be expressed
+# min_sample_frac <- 0.3  # Change this as needed (e.g., 0.1 for 10%, 0.5 for 50%)
+# 
+# # Compute the minimum number of samples a gene must be expressed in
+# min_samples <- ceiling(min_sample_frac * ncol(dds))
+# 
+# # Keep genes expressed (count > 0) in at least `min_samples` samples
+# keep <- rowSums(counts(dds) > 0) >= min_samples
+# message(sprintf("Keeping %d of %d genes (%.1f%%) with counts > 0 in at least %.0f%% of samples.",
+#            sum(keep), length(keep), 100 * mean(keep), 100 * min_sample_frac))
+dds <- dds[keep, ]
+dds$condition <- relevel(dds$condition, ref = "Normal")
+dds <- DESeq(dds)
+vsd <- vst(dds, blind = TRUE) #pull out expression of genes
+sampleDists <- dist(t(assay(vsd)))
+sampleDistMatrix <- as.matrix(sampleDists)
+colors <- colorRampPalette(rev(brewer.pal(9, "Blues")))(255)
+
+anno <- colData(vsd)[, c("condition","sampleid")] %>% as.data.frame()
+
+sampledistanceheatmap<-pheatmap(sampleDistMatrix,
+           clustering_distance_rows = sampleDists,
+           clustering_distance_cols = sampleDists,
+           col = colors, annotation_col = anno,
+           )
+#Create destination folder
+currentwd<-getwd()
+folderpath <- paste0(currentwd, "/", "DEG_Analysis")
+if (!dir.exists(folderpath)) {
+  dir.create(folderpath, recursive = TRUE)
+}
+
+# Create output folder
+output_dir <- paste0(folderpath, "/", "Cancer", "_vs_", "Normal")
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
+}
+
+cairo_pdf(paste0(output_dir, "/", "Cancer", "_vs_", "Normal", "_SampleDistance_Heatmap.pdf"), width = 10, height = 10)
+print(sampledistanceheatmap)
+dev.off()
+
+pcaData <- plotPCA(vsd, intgroup = "condition", returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+# pcaData <- merge(pcaData,colDataoi,by.x="name",by.y="SampleID")
+# rownames(pcaData)<-pcaData$name
+# pcaData <- pcaData %>% select(-Diagnosis.y) %>% select(-name, name) %>% mutate(across(where(is.character), as.factor)) %>% mutate(name = as.character(name)) %>% rename(Diagnosis = Diagnosis.x)
+# 
+# pcaData$combo <- interaction(pcaData$Primary_Site, pcaData$Pairs)
+
+pcaplot<-ggplot(pcaData, aes(x = PC1, y = PC2, color = condition)) +
+      geom_point(size = 3) +
+      xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+      ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+      coord_fixed() +
+      ggtitle(paste0("PCA_for_Cancer_vs_Normal")) +
+      geom_text_repel(label = pcaData$name)  
+cairo_pdf(paste0(output_dir, "/", "Cancer", "_vs_", "Normal","_PCA.pdf"), width = 10, height = 10)
+print(pcaplot)
+dev.off()
+
+res <- results(dds)
+
+resultsNames(dds)
+
+resLFC <- lfcShrink(dds, coef = "condition_Cancer_vs_Normal", type = "apeglm")
+resOrdered <- res[order(res$pvalue),]
+resOrderedLFC <- resLFC[order(resLFC$pvalue),]
+
+write.csv(as.data.frame(resOrdered), file = paste0(output_dir, "/", "Cancer", "_vs_", "Normal","_DE_results.csv"))
+write.csv(as.data.frame(resOrderedLFC), file = paste0(output_dir, "/", "Cancer", "_vs_", "Normal","_DE_LFC_Shrinkage_results.csv"))
+
+volcano<-EnhancedVolcano(res,
+                    lab = rownames(res),
+                    x = 'log2FoldChange',
+                    y = 'pvalue',
+                    pCutoff = 0.05,
+                    FCcutoff = 2,
+                    title = "Cancer_vs_Normal")
+
+cairo_pdf(paste0(output_dir, "/", "Cancer", "_vs_", "Normal","_Volcano.pdf"), width = 10, height = 10)
+print(volcano)
+dev.off()
+
+volcanoLFC<-EnhancedVolcano(resLFC,
+                    lab = rownames(resLFC),
+                    x = 'log2FoldChange',
+                    y = 'pvalue',
+                    pCutoff = 0.05,
+                    FCcutoff = 2,
+                    title = "Cancer_vs_Normal_(LFC Shrink)")
+
+cairo_pdf(paste0(output_dir, "/", "Cancer", "_vs_", "Normal","_Volcano_LFC_Shrinkage.pdf"), width = 10, height = 10)
+print(volcanoLFC)
+dev.off()
+
+pvalrank <- resLFC
+pvalrank$logpval <- -log10(resLFC$pvalue)
+pvalrank <- pvalrank[!is.na(pvalrank$pvalue),]
+pvalrank$lfcsign <- sign(pvalrank$log2FoldChange)
+pvalrank$metric <- pvalrank$logpval * pvalrank$lfcsign
+pvalrank <- pvalrank[order(pvalrank$metric, decreasing = TRUE),]
+pvalrankData <- pvalrank$metric
+names(pvalrankData) <- rownames(pvalrank)
+pvalrankData <- pvalrankData[!is.infinite(pvalrankData)]
+    
+pvalrankdf <- data.frame(rownames(pvalrank), pvalrank$metric)
+    
+write.table(x = pvalrankdf,file = paste0(output_dir, "/", "Cancer", "_vs_", "Normal","_Ranked_Genes.rnk"), sep = "\t")
+
+
+# Redef Directory
+output_dir_hall <- paste0(output_dir, "/", "HALLMARK_Pathway_Results")
+if (!dir.exists(output_dir_hall)) {
+  dir.create(output_dir_hall, recursive = TRUE)
+}
+
+# HALLMARK
+hallpathways <- gmtPathways(gmt.file = "Bioinformatic Toolbox/References/h.all.v2023.2.Hs.symbols.gmt")
+hallfgseaResults <- fgsea(pathways = hallpathways, stats = pvalrankData)
+
+hallfgseares<- hallfgseaResults[order(pval),] %>% select(pathway, pval, padj, ES, NES, size) %>% arrange(desc(NES))
+write.csv(hallfgseares,file = paste0(output_dir_hall, "/", "Cancer", "_vs_", "Normal", "_HALLMARK_GSEAResults.csv"))
+
+topPathways <- hallfgseares[head(order(pval), n=15)][order(NES), pathway]
+hallplot <- plotGseaTable(hallpathways[topPathways], pvalrankData, hallfgseaResults, gseaParam=0.5)  
+
+for (pathway_name in topPathways) {
+  file_name <- paste0(output_dir_hall, "/", "Cancer", "_vs_", "Normal", "_", pathway_name, ".pdf")
+  x<-plotEnrichment(pathway = hallpathways[[pathway_name]], stats = pvalrankData)
+  cairo_pdf(file_name, width = 10, height = 10)
+  print(x)
+  dev.off()
+}
+
+cairo_pdf(paste0(output_dir_hall, "/", "Cancer", "_vs_", "Normal", "_HALLMARK_GSEATable.pdf"), width = 10, height = 10)
+print(hallplot)
+dev.off()
+    
+# Redef Directory
+output_dir_kegg <- paste0(output_dir, "/", "KEGG_Pathway_Results")
+if (!dir.exists(output_dir_kegg)) {
+  dir.create(output_dir_kegg, recursive = TRUE)
+}
+
+# KEGG
+keggpathways <- gmtPathways(gmt.file = "Bioinformatic Toolbox/References/c2.cp.kegg_legacy.v2023.2.Hs.symbols.gmt")
+keggfgseaResults <- fgsea(pathways = keggpathways, stats = pvalrankData)
+
+keggfgseares<- keggfgseaResults[order(pval),] %>% select(pathway, pval, padj, ES, NES, size) %>% arrange(desc(NES))
+write.csv(keggfgseares,file = paste0(output_dir_kegg, "/", "Cancer", "_vs_", "Normal", "_KEGG_GSEAResults.csv"))
+
+topPathways <- keggfgseares[head(order(pval), n=15)][order(NES), pathway]
+keggplot <- plotGseaTable(keggpathways[topPathways], pvalrankData, keggfgseaResults, gseaParam=0.5)  
+
+for (pathway_name in topPathways) {
+  file_name <- paste0(output_dir_kegg, "/", "Cancer", "_vs_", "Normal", "_", pathway_name, ".pdf")
+  x<-plotEnrichment(pathway = keggpathways[[pathway_name]], stats = pvalrankData)
+  cairo_pdf(file_name, width = 10, height = 10)
+  print(x)
+  dev.off()
+}
+
+cairo_pdf(paste0(output_dir_kegg, "/", "Cancer", "_vs_", "Normal", "_KEGG_GSEATable.pdf"), width = 10, height = 10)
+print(keggplot)
+dev.off()
+    
+# Redef Directory
+output_dir_gobp <- paste0(output_dir, "/", "GOBP_Pathway_Results")
+if (!dir.exists(output_dir_gobp)) {
+  dir.create(output_dir_gobp, recursive = TRUE)
+}
+    
+# GO BP
+gobppathways <- gmtPathways(gmt.file = "Bioinformatic Toolbox/References/c5.go.bp.v2023.2.Hs.symbols.gmt")
+gobpfgseaResults <- fgsea(pathways = gobppathways, stats = pvalrankData)
+
+gobpfgseares<- gobpfgseaResults[order(pval),] %>% select(pathway, pval, padj, ES, NES, size) %>% arrange(desc(NES))
+write.csv(gobpfgseares,file = paste0(output_dir_gobp, "/", "Cancer", "_vs_", "Normal", "_GOBP_GSEAResults.csv"))
+
+topPathways <- gobpfgseares[head(order(pval), n=15)][order(NES), pathway]
+gobpplot <- plotGseaTable(gobppathways[topPathways], pvalrankData, gobpfgseaResults, gseaParam=0.5)   
+
+for (pathway_name in topPathways) {
+  file_name <- paste0(output_dir_gobp, "/", "Cancer", "_vs_", "Normal", "_", pathway_name, ".pdf")
+  x<-plotEnrichment(pathway = gobppathways[[pathway_name]], stats = pvalrankData)
+  cairo_pdf(file_name, width = 10, height = 10)
+  print(x)
+  dev.off()
+}
+
+cairo_pdf(paste0(output_dir_gobp, "/", "Cancer", "_vs_", "Normal", "_GOBP_GSEATable.pdf"), width = 10, height = 10)
+print(gobpplot)
+dev.off()
+
+# Redef Directory
+output_dir_reac <- paste0(output_dir, "/", "Reactome_Pathway_Results")
+if (!dir.exists(output_dir_reac)) {
+  dir.create(output_dir_reac, recursive = TRUE)
+}
+
+# REACTOME
+reacpathways <- gmtPathways(gmt.file = "Bioinformatic Toolbox/References/c2.cp.reactome.v2023.2.Hs.symbols.gmt")
+reacfgseaResults <- fgsea(pathways = reacpathways, stats = pvalrankData)
+
+reacfgseares<- reacfgseaResults[order(pval),] %>% select(pathway, pval, padj, ES, NES, size) %>% arrange(desc(NES))
+write.csv(reacfgseares,file = paste0(output_dir_reac, "/", "Cancer", "_vs_", "Normal", "_REACTOME_GSEAResults.csv"))
+
+topPathways <- reacfgseares[head(order(pval), n=15)][order(NES), pathway]
+reacplot <- plotGseaTable(reacpathways[topPathways], pvalrankData, reacfgseaResults, gseaParam=0.5)   
+
+for (pathway_name in topPathways) {
+  file_name <- paste0(output_dir_reac, "/", "Cancer", "_vs_", "Normal", "_", pathway_name, ".pdf")
+  x<-plotEnrichment(pathway = reacpathways[[pathway_name]], stats = pvalrankData)
+  cairo_pdf(file_name, width = 10, height = 10)
+  print(x)
+  dev.off()
+}
+
+cairo_pdf(paste0(output_dir_reac, "/", "Cancer", "_vs_", "Normal", "_REACTOME_GSEATable.pdf"), width = 10, height = 10)
+print(reacplot)
+dev.off()
+  
+print(paste("Completed deg analysis for:", "Cancer", "_vs_", "Normal"))
+```
+
