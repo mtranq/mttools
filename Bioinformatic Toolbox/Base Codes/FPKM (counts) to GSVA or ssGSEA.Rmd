@@ -1,0 +1,146 @@
+---
+title: "FPKM (counts) to GSVA/ssGSEA"
+output: html_notebook
+---
+
+```{r}
+#fpkm
+  #rows-genes
+  #columns-samples
+```
+
+
+## Gene Set Variation Analysis (GSVA)
+-estimates enrichment scores by non-parametric kernel density estimation (KDE)
+-compares local expression ranks within each sample
+-captures subtle pathway activity changes in a continuous manner
+-works well on log-transformed continuous expression data
+-produces relative enrichment score, making it sensitive to small variations in gene expression (less affected by extreme expression values)
+-performs well with bulk RNASeq
+
+```{r process gsva}
+#can use log transformed FPKM values for GSVA
+log_fpkm<- log2(fpkm+1) %>% as.matrix()
+#OR log transformed count values (if you didn't have FPKM)
+log_cnts<-log2(cnts+1) %>% as.matrix()
+
+gsva_data_fpkm <- gsva(gsvaParam(log_fpkm, hallmark,kcdf = 'Gaussian'), verbose=T)
+gsva_data_cnts <- gsva(gsvaParam(log_cnts, hallmark,kcdf = 'Poisson'), verbose=T)
+```
+
+## Single-Sample Gene Set Enrichment Analysis (ssGSEA)
+-calculates an enrichment score for each gene set within each individual sample
+-ranks all gene with a sample and computes by an empirical cumulative distribution functon (ECDF) seperately for genes inside and outside the gene set
+-the difference between the two ECDFs form the enrichment score
+-works on any gene expression data(counts,FPKM,log-transformed)
+-works well on raw or normalized gene expression data
+-produces absolute enrichment scores(not relative to other samples)
+-robust for datasets with heterogenous distributions
+-less sensitive to expression scaling and transformations
+-more sensitive to highly expressed genes
+
+```{r process ssgsea}
+#Can use raw counts
+raw_cnts <- cnts %>% as.matrix()
+
+ssgsea_data_cnts <- gsva(ssgseaParam(raw_cnts, hallmark), verbose=T) #note: default is normalized
+```
+
+```{r import hallmark info}
+hallmark_info <- read.csv("C:/Users/mat4030/Desktop/Helen's CAF/Data/Hallmark_desc_groups.txt", sep="\t", header=TRUE) #import hallmark info for heatmap
+hallmark_info$Process.category<-toupper(hallmark_info$Process.category)
+```
+
+```{r heatmap gsva fpkm calc}
+min.a = min(gsva_data_fpkm) #define min
+mid.a= 0 #define mid
+max.a= max(gsva_data_fpkm) #define max
+rownames(gsva_data_fpkm)<- gsub('HALLMARK_','',rownames(gsva_data_fpkm)) #remove HALLMARK from pathway names
+gsva_data_fpkm <- gsva_data_fpkm[hallmark_info$Hallmark.name,] #order by Name
+```
+
+```{r heatmap gsva cnts calc}
+min.b= min(gsva_data_cnts) #define min
+mid.b= 0 #define mid
+max.b= max(gsva_data_cnts) #define max
+rownames(gsva_data_cnts)<- gsub('HALLMARK_','',rownames(gsva_data_cnts)) #remove HALLMARK from pathway names
+gsva_data_cnts <- gsva_data_cnts[hallmark_info$Hallmark.name,] #order by Name
+```
+```{r heatmap ssgsea cnts calc}
+min.c= min(ssgsea_data_cnts) #define min
+mid.c= 0 #define mid
+max.c= max(ssgsea_data_cnts) #define max
+rownames(ssgsea_data_cnts)<- gsub('HALLMARK_','',rownames(ssgsea_data_cnts))#remove HALLMARK from pathway names
+ssgsea_data_cnts <- ssgsea_data_cnts[hallmark_info$Hallmark.name,] #order by Name
+```
+
+# Hallmark Visualizations
+
+## Heatmap GSVA FPKM
+
+```{r Heatmap GSVA FPKM}
+#cairo_pdf(filename = "C:/Users/mat4030/Desktop/Helen's CAF/Output/GSVA_log_transformed_FPKM_Heatmap.pdf",width = 10,height = 10)
+Heatmap(gsva_data_fpkm,
+        show_column_names = T,
+        cluster_row_slices = T,
+        cluster_columns = T,
+        #cluster_column_slices = T, #uncomment if you add in column_split
+        row_title_rot =0,
+        row_split = hallmark_info$Process.category,
+        #column_split = anno$Diagnosis, #uncomment if you want to split by Cancer v Normal
+        #column_split = anno$Primary_Site, #uncomment if you want to split by Primary Site
+        bottom_annotation = annoheat,
+        column_title_gp =gpar(fontsize = 8),
+        row_names_gp =gpar(fontsize = 6),
+        row_title_gp = gpar(fontsize = 8),
+        heatmap_legend_param = list(title = "ES"),
+        col = colorRamp2(c(min.a, mid.a, max.a), c("midnightblue","gray90","firebrick"))
+        )
+#dev.off()
+```
+
+## Heatmap GSVA Counts
+
+```{r Heatmap GSVA Counts}
+#cairo_pdf(filename = "C:/Users/mat4030/Desktop/Helen's CAF/Output/GSVA_log_transformed_Counts_Heatmap.pdf",width = 10,height = 10)
+Heatmap(gsva_data_cnts,
+        show_column_names = T,
+        cluster_row_slices = T,
+        cluster_columns = T,
+        #cluster_column_slices = T, #uncomment if you add in column_split
+        row_title_rot =0,
+        row_split = hallmark_info$Process.category,
+        #column_split = anno$Diagnosis, #uncomment if you want to split by Cancer v Normal
+        #column_split = anno$Primary_Site, #uncomment if you want to split by Primary Site
+        bottom_annotation = annoheat,
+        column_title_gp =gpar(fontsize = 8),
+        row_names_gp =gpar(fontsize = 6),
+        row_title_gp = gpar(fontsize = 8),
+        heatmap_legend_param = list(title = "ES"),
+        col = colorRamp2(c(min.b, mid.b, max.b), c("midnightblue","gray90","firebrick"))
+        )
+#dev.off()
+```
+
+## Heatmap ssGSEA Counts
+
+```{r Heatmap ssGSEA Counts}
+#cairo_pdf(filename = "C:/Users/mat4030/Desktop/Helen's CAF/Output/ssGSEA_rawCounts_Heatmap.pdf",width = 10,height = 10)
+Heatmap(ssgsea_data_cnts,
+        show_column_names = T,
+        cluster_row_slices = T,
+        cluster_columns = T,
+        #cluster_column_slices = T, #uncomment if you add in column_split
+        row_title_rot =0,
+        row_split = hallmark_info$Process.category,
+        #column_split = anno$Diagnosis, #uncomment if you want to split by Cancer v Normal
+        #column_split = anno$Primary_Site, #uncomment if you want to split by Primary Site
+        bottom_annotation = annoheat,
+        column_title_gp =gpar(fontsize = 8),
+        row_names_gp =gpar(fontsize = 6),
+        row_title_gp = gpar(fontsize = 8),
+        heatmap_legend_param = list(title = "NES"),
+        col = colorRamp2(c(min.c, mid.c, max.c), c("midnightblue","gray90","firebrick"))
+        )
+#dev.off()
+```

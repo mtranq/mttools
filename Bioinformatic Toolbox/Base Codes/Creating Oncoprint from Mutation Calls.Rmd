@@ -1,0 +1,85 @@
+---
+title: "Creating Oncoprint/Oncoplot from Mutation calls"
+output: html_notebook
+---
+
+#library
+```{r library}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(ComplexHeatmap)
+```
+
+#import
+```{r import}
+#df - must contain gene, sampleid, and alterationtype
+#coldata - must contain sampleid and metadata
+#geneofinterest - must contain gene
+```
+
+#pivot wider
+```{r}
+df.pw<-df %>% pivot_wider(id_cols = gene, names_sep = ".", names_from = sampleid, values_from = alterationtype, values_fn = function(x) paste0(unlist(x), collapse = ";")) %>% as.matrix()
+rownames(df.pw) <- df.pw[,1] #name rows as gene
+df.pw <- df.pw[,-1] #take out column of gene
+```
+
+#filter/order
+```{r}
+#if necessary for order and filter
+df.pw.goi<- df.pw[geneofinterest$gene,coldata$Sample.ID]
+df.pw.goi
+```
+
+#create annotation
+```{r}
+coldata <- as.matrix(coldata)
+row.names(coldata) <- coldata[,1] #make id the rownames
+coldata <- coldata[,-1]
+coldata <- as.data.frame(coldata)
+coldata <- coldata[match(colnames(df.pw.goi), rownames(coldata)), ]
+
+all(rownames(coldata) %in% colnames(df.pw.goi)) #should be TRUE
+```
+
+#create colors
+```{r}
+alteration_colors <- c(
+  "Amp" = "darkslateblue",
+  "CFS" = "blue",
+  "CN0" = "mediumseagreen",
+  "Germline" = "red4",
+  "CN1" = "plum",
+  "SNV" = "mediumslateblue",
+  "SV" = "black")
+```
+
+```{r}
+cairo_pdf("Output/UpperGILandscapeOncoprint_different_size.pdf",width = 10, height = 10)
+oncoPrint(df.pw.goi,
+          alter_fun = list(background = alter_graphic("rect", fill = "#F2F3F5"),
+Amp = function(x, y, w, h) grid.rect(x, y, w*0.9, h*1, gp = gpar(fill ="darkslateblue", col = NA)), 
+CFS = function(x, y, w, h) grid.rect(x, y, w*0.9, h*1, gp = gpar(fill = "blue", col = NA)),
+CN0  = function(x, y, w, h) grid.rect(x, y, w*0.9, h*0.8, gp = gpar(fill ="mediumseagreen", col = 0)),
+Germline = function(x, y, w, h) grid.rect(x, y, w*0.9, h*0.6, gp = gpar(fill = "red4",col = 0)),
+CN1 = function(x, y, w, h) grid.rect(x, y, w*0.9, h*0.4, gp = gpar(fill = "plum",col = 0)),
+SNV = function(x, y, w, h) grid.rect(x, y, w*0.9, h*0.2, gp = gpar(fill ="mediumslateblue", col = 0)),
+SV = function(x, y, w, h) {
+                            grid.segments(x - w*0.4, y - h*0.4, x + w*0.4, y + h*0.4, gp = gpar(lwd = 2))
+                            grid.segments(x + w*0.4, y - h*0.4, x - w*0.4, y + h*0.4, gp = gpar(lwd = 2)) }, #makes an 'X'
+"NA" = function(x, y, w, h) grid.rect(x, y, w*0.0, h*0.0, gp = gpar(fill = "#CCCCCC", col = 0))),
+          col = alteration_colors,
+          show_column_names = T,
+          column_names_rot = 90,
+          top_annotation = HeatmapAnnotation(
+            'Primary vs Met'=coldata$`P vs M`, 
+            'Primary Site'=coldata$`Primary Site`, 
+            'TMB'=coldata$TMB, 
+            'MSI'=coldata$MSI, 
+            'HRD'=coldata$HRD)
+          )
+dev.off()
+```
+

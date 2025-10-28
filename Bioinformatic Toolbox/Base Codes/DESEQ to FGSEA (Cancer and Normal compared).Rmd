@@ -5,6 +5,16 @@ author: Tranquille Marvel
 ---
 
 ```{r}
+#cnts
+  #columns-samples
+  #rows- genes
+#coldata
+  #rows-samples
+  #columns- condition
+```
+
+
+```{r}
 colDataoi<-coldata 
 ctsoi <- cnts[, rownames(colDataoi)]
 
